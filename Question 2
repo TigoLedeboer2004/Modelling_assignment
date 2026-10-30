@@ -1,1 +1,71 @@
 
+%fsm moore
+function u = controlinput(t, X, q, par)
+ux,uy=  %motor input 
+Un= %nozzle heat
+switch q
+    case "PRINTING"
+        [ux, uy] = %u inputs voor goede shape
+    case "STOP"
+        ux= 0;
+        uy=0;
+    case "TO_ORIGIN"
+        % y down, then x left
+    case "WIPING"
+        %user input when done? move left and right?
+    case {"COOLING"} 
+            
+    case {"LOADING"}
+        un = 0;% heater off to cool
+    case "HEATING"
+        un = 24%v
+
+    case "TO_SAVED"
+        ux= %function to bring back x
+        un = 24%v
+        end
+        
+end
+
+
+%when to switch state
+function q = fsmmoore(t, X, q, par)
+
+        switch q
+            case "PRINTING"
+                    Ux,Uy =%input from ellipse func
+            case "STOP"
+                if vx=0 , vy=0
+                    x.saved= X(1)
+                    y.saved= X(4)
+                    q="TO_ORIGIN";
+                end
+            case "TO_ORIGIN"
+                    if detector_automatum== "atorigin"
+                        q="WIPING";
+                    end
+            case "WIPING"
+                    answer = "";
+                    while ~strcmpi(answer, "W") %user input needed
+                         answer = input("wipe the nozzle. Wiped? Press W + Enter: ", "s");
+                    
+            case "COOLING"
+                    if t<= par.Tlow
+                         q="LOADING";
+                    end
+            case "LOADING"
+                    answer = "";
+                    while ~strcmpi(answer, "L")%user input needed
+                        answer = input("load new filament. when done press L + Enter: ", "s");
+                    end
+                    colour = "green";
+                    q = "HEATING";
+             case "HEATING"
+                    if t>= par.Thigh
+                         q="TO_SAVED"
+                    end
+             case "TO_SAVED"
+                   if X(1)=x.saved , X(4)= y.saved
+                         q="PRINTING"
+                   end
+end
