@@ -296,3 +296,105 @@ grid on;
 xlabel('Time (s)');
 ylabel('Capacitor voltage v_n (V)');
 title('Q1.5: Nozzle capacitor voltage');
+%% Q1.6 Filament printing
+syms s t_f rho_f c_p_f k_f w_f h_air h_bed T_air T_bed T_left T_middle T_right ds_f T_f(s,t_f) T_eq
+
+D_f = k_f/(rho_f*c_p_f);
+gamma_air = 3*h_air/(rho_f*c_p_f*w_f);
+gamma_bed = h_bed/(rho_f*c_p_f*w_f);
+
+PDE_fil = diff(T_f, t_f) == D_f*diff(T_f, s, 2) - gamma_air*(T_f - T_air) - gamma_bed*(T_f - T_bed);
+
+T_ss = (T_left - 2*T_middle + T_right)/ds_f^2;
+T_dot_f = D_f*T_ss - gamma_air*(T_middle - T_air) - gamma_bed*(T_middle - T_bed);
+T_equilibrium = solve(subs(T_dot_f, [T_left, T_middle, T_right], [T_eq, T_eq, T_eq]) == 0, T_eq);
+
+parameters_fil = [rho_f; c_p_f; k_f; w_f; h_air; h_bed; T_air; T_bed];
+parameters_values_fil = [ 1250; 1800; 0.20; 0.0005; 12; 80; 20; 60];
+
+D_f_sim = double(subs(D_f, parameters_fil, parameters_values_fil));
+gamma_air_sim = double(subs(gamma_air, parameters_fil, parameters_values_fil));
+gamma_bed_sim = double(subs(gamma_bed, parameters_fil, parameters_values_fil));
+T_air_sim = double(subs(T_air, parameters_fil, parameters_values_fil));
+T_bed_sim = double(subs(T_bed, parameters_fil, parameters_values_fil));
+T_equilibrium_sim = double(subs(T_equilibrium, parameters_fil, parameters_values_fil));
+
+a = 0.050;
+b = 0.035;
+omega = 1.0;
+t_print = 2*pi/omega;
+
+phi = linspace(0,2*pi,10001);
+x_path = a*cos(phi);
+y_path = b*sin(phi);
+s_path = [0,cumsum(sqrt(diff(x_path).^2 + diff(y_path).^2))];
+L_f = s_path(end);
+N_f = 2410;
+ds_f_sim = L_f/N_f;
+s_f = (0:N_f-1)*ds_f_sim;
+
+phi_f = interp1(s_path,phi,s_f);
+t_deposit = phi_f/omega;
+T_deposit = interp1(t_n_sim,X_n_sim(1,:),t_preheat);
+
+T_dot_f_sim = subs(T_dot_f, [parameters_fil; ds_f], [parameters_values_fil; ds_f_sim]);
+T_dot_f_function = matlabFunction(T_dot_f_sim, 'Vars',{T_left, T_middle, T_right});
+dt_f = min(0.002, 0.4*ds_f_sim^2/D_f_sim);
+tolerance_f = 1.0;
+max_cooling_time = 300;
+T_f_sim = nan(N_f,1);
+
+t_now = 0;
+t_history = [];
+T_history = [];
+while t_now < t_print + max_cooling_time
+    N_active = sum(t_deposit <= t_now);
+    for j = 1:N_active
+        if isnan(T_f_sim(j))
+            T_f_sim(j) = T_deposit;
+        end
+    end
+    T_dot_sim = zeros(N_f,1);
+    for j = 1:N_active
+        if t_now >= t_print
+            j_left = mod(j-2,N_f)+1;
+            j_right = mod(j,N_f)+1;
+        else
+            j_left = max(j-1,1);
+            j_right = min(j+1,N_active);
+        end
+        T_dot_sim(j) = T_dot_f_function( T_f_sim(j_left), T_f_sim(j), T_f_sim(j_right));
+    end
+    T_f_sim(1:N_active) = T_f_sim(1:N_active) + dt_f*T_dot_sim(1:N_active);
+    t_now = t_now + dt_f;
+    if mod(round(t_now/dt_f),50) == 0
+        t_history(end+1,1) = t_now;
+        T_history(end+1,:) = T_f_sim.';
+    end
+    if t_now >= t_print && N_active == N_f
+        T_difference = max(T_f_sim) - min(T_f_sim);
+
+        if T_difference < tolerance_f
+            break;
+        end
+    end
+end
+
+figure;
+imagesc(s_f, t_history, T_history);
+set(gca,'YDir','normal');
+colorbar;
+xlabel('Position along filament (m)');
+ylabel('Time (s)');
+title('Q1.6: Temperature distribution during printing and cooling');
+
+figure;
+plot(s_f,T_f_sim,'LineWidth',1.5);
+hold on;
+yline(T_equilibrium_sim,'k--','Equilibrium temperature');
+grid on;
+xlabel('Position along filament (m)');
+ylabel('Temperature (^{\circ}C)');
+title('Q1.6: Final filament temperature distribution');
+legend('Filament temperature','Equilibrium temperature', ...
+       'Location','best');
