@@ -1,71 +1,105 @@
 
-%fsm moore
-function u = controlinput(t, X, q, par)
-ux,uy=  %motor input 
-Un= %nozzle heat
-switch q
-    case "PRINTING"
-        [ux, uy] = %u inputs voor goede shape
-    case "STOP"
-        ux= 0;
-        uy=0;
-    case "TO_ORIGIN"
-        % y down, then x left
-    case "WIPING"
-        %user input when done? move left and right?
-    case {"COOLING"} 
-            
-    case {"LOADING"}
-        un = 0;% heater off to cool
-    case "HEATING"
-        un = 24%v
-
-    case "TO_SAVED"
-        ux= %function to bring back x
-        un = 24%v
-        end
-        
+function events = statechangeevents(t, X, memory, par)
+events.colour   =   
+events.filament =  
+events.settled  = abs(vx) < 1e-4 && abs(vy) < 1e-4;      
+events.Thigh    = X(7) >= par.nozzle.Thigh;                     
+events.Tlow     = X(7) <= par.nozzle.Tlow;                   
+events.wiped    = while ~strcmpi(answer, "W") %user input needed
+                         answer = input("wipe the nozzle. Wiped? Press W + Enter: ", "s"); % make work later              
+events.loaded   = while ~strcmpi(answer, "L")%user input needed
+                        answer = input("load new filament. when done press L + Enter: ", "s");             
+events.atsaved  = 
+events.Mm       = memory.Mm;                            
 end
 
 
-%when to switch state
-function q = fsmmoore(t, X, q, par)
+function [q, memory] = fsmmoore(t, X, q, events, memory, par)
+    qold = q;
+    switch q
+        case "PRINTING"
+            if events.printdone
+                fprintf('t=%5.2f s: ellipse finished (back at start point)\n', t);
+                q = "DONE";
+            elseif events.colour
+                fprintf('t=%5.2f s: Colour change to green\n', t);
+                memory.colour = "green"; q = "STOP";
+            elseif events.filament
+                fprintf('t=%5.2f s: Filament almost empty, replacing spool\n', t);
+                memory.filamentdone = true; q = "STOP";
+            end
+        case "STOP"
+            if events.settled && (t - memory.tmode) > 0.1
+                dref = par.trajectory.desired(memory.tprint);
+                memory.xsaved = dref.x; memory.ysaved = dref.y;
+                memory.phase = "V"; memory.pstate = "anyxy";
+                q = "TO_ORIGIN";
+            end
+        case "TO_ORIGIN"
+            [memory.pstate, atorigin] = automatum(memory.pstate, events.Mm);
+            if memory.phase == "V" && events.Mm == "V0"
+                memory.phase = "H";                 
+            end
+            if atorigin
+                fprintf('t=%5.2f s: head is at origin\n', t);
+                q = "WIPING";
+            end
+        case "WIPING"
+            if events.wiped,   q = "COOLING";  end
+        case "COOLING"
+            if events.Tlow,    q = "LOADING";  end
+        case "LOADING"
+            if events.loaded,  q = "HEATING";  end
+        case "HEATING"
+            if events.Thigh,   q = "TO_SAVED"; end
+        case "TO_SAVED"
+            if events.atsaved
+                fprintf('t=%5.2f s: back at saved position, printing\n', t);
+                q = "PRINTING";
+            end
+    end
 
-        switch q
-            case "PRINTING"
-                    Ux,Uy =%input from ellipse func
-            case "STOP"
-                if vx=0 , vy=0
-                    x.saved= X(1)
-                    y.saved= X(4)
-                    q="TO_ORIGIN";
-                end
-            case "TO_ORIGIN"
-                    if detector_automatum== "atorigin"
-                        q="WIPING";
-                    end
-            case "WIPING"
-                    answer = "";
-                    while ~strcmpi(answer, "W") %user input needed
-                         answer = input("wipe the nozzle. Wiped? Press W + Enter: ", "s");
-                    
-            case "COOLING"
-                    if t<= par.Tlow
-                         q="LOADING";
-                    end
-            case "LOADING"
-                    answer = "";
-                    while ~strcmpi(answer, "L")%user input needed
-                        answer = input("load new filament. when done press L + Enter: ", "s");
-                    end
-                    colour = "green";
-                    q = "HEATING";
-             case "HEATING"
-                    if t>= par.Thigh
-                         q="TO_SAVED"
-                    end
-             case "TO_SAVED"
-                   if X(1)=x.saved , X(4)= y.saved
-                         q="PRINTING"
-                   end
+function [state, atorigin] = automatum(Mm)
+switch state
+    case "anyxy"
+        if Mm == "H+", 
+            state = "movingleft"; end
+        if Mm == "V+", 
+            state = "movingdown"; end
+    case "movingleft"
+        if Mm == "H0", 
+            state = "atleftboundary"; end
+    case "atleftboundary"
+        if Mm == "V+", 
+            state = "movingdownoverleftboundary"; end
+        if Mm == "V0", 
+            state = "atorigin"; end
+    case "movingdownoverleftboundary"
+        if Mm == "V0", 
+            state = "atorigin"; end
+    case "movingdown"
+        if Mm == "V0", 
+            state = "atlowerboundary"; end
+    case "atlowerboundary"
+        if Mm == "H+",     
+            state = "movingleftoverlowerboundary";
+        elseif Mm == "H0", 
+            state = "atorigin"; end
+    case "movingleftoverlowerboundary"
+        if Mm == "H0", 
+            state = "atorigin"; end
+    case "atorigin"
 end
+atorigin = (state == "atorigin");
+end
+
+%define the walls
+function [X] = walls(X, par)
+r = par.carriage.r_m;         
+speed = Hk*X(3:4);          
+L = par.printerdimensions;
+for i = 1:2
+    if position(i) < 0, position(i) = 0; speed(i) = max(speed(i),0); end
+    if position(i) > L, position(i) = L; speed(i) = min(speed(i),0); end
+end
+X(1:2) = Hk\position;  X(3:4) = Hk\speed;  
