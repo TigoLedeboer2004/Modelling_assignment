@@ -230,3 +230,69 @@ xlabel('Time [s]');
 ylabel('Motor voltage [V]');
 title('Q1.4: Required motor voltages');
 legend('Left motor', 'Right motor', 'Location', 'best');
+%% Q1.5 Model nozzle
+syms T_n i_n v_n dot_T_n dot_i_n dot_v_n C_t_n R_t_n R_n L_n C_n T_e u_n T_d
+
+X_n = [T_n; i_n; v_n];
+X_n_dot = [dot_T_n; dot_i_n; dot_v_n];
+
+P_heating = v_n^2/R_n;
+P_loss = (T_n - T_e)/R_t_n;
+dot_T_n = (P_heating-P_loss)/C_t_n;
+dot_i_n = (u_n-v_n)/L_n;
+dot_v_n = (i_n-v_n/R_n)/C_n;
+X_n_dot = [dot_T_n; dot_i_n; dot_v_n];
+
+v_n_equation = sqrt(R_n/R_t_n*(T_d-T_e));
+i_n_equation = v_n_equation/R_n;
+u_n_equation = v_n_equation;
+parameters_n = [C_t_n; R_t_n; R_n; L_n; C_n; T_e; T_d];
+parameters_values_n = [15.0; 3.25; 15.0; 0.004; 1.0e-5; 20.0; 250.0];
+X_n_dot_sim = subs(X_n_dot, parameters_n, parameters_values_n);
+u_n_sim = double(subs(u_n_equation, parameters_n, parameters_values_n));
+
+X_n_0 = [T_e; 0; 0];
+X_n_0_sim = double(subs(X_n_0, parameters_n, parameters_values_n));
+tau_n = double(subs(R_t_n*C_t_n, parameters_n, parameters_values_n));
+t_preheat = 7*tau_n;
+t_print = 2*pi;
+t_end = t_preheat+t_print;
+dt_n = 1.0e-5;
+t_n_sim = 0:dt_n:t_end;
+n_steps = length(t_n_sim);
+X_n_sim = zeros(3,n_steps);
+X_n_sim(:,1) = X_n_0_sim;
+X_n_dot_function = matlabFunction(subs(X_n_dot_sim,u_n,u_n_sim), 'Vars',{T_n,i_n,v_n});
+
+for j = 1:n_steps-1
+    X_n_dot_sim = X_n_dot_function(X_n_sim(1,j), X_n_sim(2,j), X_n_sim(3,j));
+    X_n_sim(:,j+1) = X_n_sim(:,j) + dt_n*X_n_dot_sim;
+end
+
+figure;
+plot(t_n_sim, X_n_sim(1,:), 'LineWidth', 1.5);
+hold on;
+yline(250,'k--','Desired temperature');
+xline(t_preheat,'r--','Printing starts');
+grid on;
+xlabel('Time [s]');
+ylabel('Nozzle temperature T_n (^{\circ}C)');
+title('Q1.5: Nozzle temperature');
+legend('Simulated temperature','Desired temperature', 'Printing starts','Location','best');
+
+figure;
+tiledlayout(2,1);
+
+nexttile;
+plot(t_n_sim, X_n_sim(2,:), 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Inductor current I_n (A)');
+title('Q1.5: Nozzle current');
+
+nexttile;
+plot(t_n_sim, X_n_sim(3,:), 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Capacitor voltage v_n (V)');
+title('Q1.5: Nozzle capacitor voltage');
