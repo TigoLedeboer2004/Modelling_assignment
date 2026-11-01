@@ -396,5 +396,4 @@ grid on;
 xlabel('Position along filament (m)');
 ylabel('Temperature (^{\circ}C)');
 title('Q1.6: Final filament temperature distribution');
-legend('Filament temperature','Equilibrium temperature', ...
-       'Location','best');
+legend('Filament temperature','Equilibrium temperature', 'Location','best');
