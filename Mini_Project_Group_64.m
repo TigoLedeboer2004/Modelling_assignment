@@ -637,7 +637,6 @@ while t_h < t_max_h && q ~= "DONE"
 end
 figure;
 hold on;
-plot(travel_xy(1, :), travel_xy(2, :), 'Color', [0.6 0.6 0.6], 'LineWidth', 1);
 blue = printed_colour == "blue";
 red = printed_colour == "red";
 scatter(printed_xy(1, blue),printed_xy(2, blue), 5, 'b', 'filled');
@@ -862,7 +861,6 @@ end
 
 figure;
 hold on;
-plot(travel_xy_square(1, :), travel_xy_square(2, :), 'Color', [0.6 0.6 0.6], 'LineWidth', 1);
 blue_square = printed_colour_square == "blue";
 red_square = printed_colour_square == "red";
 scatter(printed_xy_square(1, blue_square), printed_xy_square(2, blue_square), 5, 'b', 'filled');
