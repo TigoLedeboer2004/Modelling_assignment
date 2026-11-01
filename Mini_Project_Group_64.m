@@ -397,11 +397,11 @@ xlabel('Position along filament (m)');
 ylabel('Temperature (^{\circ}C)');
 title('Q1.6: Final filament temperature distribution');
 legend('Filament temperature','Equilibrium temperature', 'Location','best');
-%% Q3.1 Hybrid system 
+%% Q3.1 Hybrid system filament replacement
 r_m_sim = parameters_values(1);
 R_m_sim = parameters_values(8);
 K_m_sim = parameters_values(7);
-L_m_sim = parameters_values(9);  
+L_m_sim = parameters_values(9);
 C_t_n_sim = parameters_values_n(1);
 R_t_n_sim = parameters_values_n(2);
 R_n_sim = parameters_values_n(3);
@@ -434,61 +434,70 @@ theta_0_h = H_sim\xy_0_h;
 J_eq_h = double(subs(J_eq, parameters, parameters_values));
 d_plus_h = double(subs(d_plus, parameters, parameters_values));
 d_minus_h = double(subs(d_minus, parameters, parameters_values));
-D_h = [d_plus_h, d_minus_h; d_minus_h, d_plus_h];
+
+D_h = [d_plus_h, d_minus_h;
+       d_minus_h, d_plus_h];
 xy_dot_0_h = [0; b_h*omega_h];
 xy_ddot_0_h = [-a_h*omega_h^2; 0];
 theta_dot_0_h = H_sim\xy_dot_0_h;
 theta_ddot_0_h = H_sim\xy_ddot_0_h;
 i_0_h = (J_eq_h*theta_ddot_0_h + D_h*theta_dot_0_h)/K_m_sim;
-theta_move_start = theta_0_h;
-theta_move_end = theta_0_h;
-X_h = [theta_0_h; theta_dot_0_h; i_0_h; T_d_sim; u_n_sim/R_n_sim; u_n_sim];
+theta_move_start = zeros(2, 1);
+theta_move_end = theta_0_h(:);
+X_h = [zeros(6,1); T_d_sim; u_n_sim/R_n_sim; u_n_sim];
 
-% Initial FSM state
-q = "PRINTING";
+q = "TO_FIRST_POINT";
 t_h = 0;
 t_print_progress = 0;
 t_mode = 0;
-colour = "red";
+colour = "blue";
+blue_restocked = false;
 colour_changed = false;
-filament_changed = false;
-theta_saved = theta_0_h;
+red_restocked = false;
+theta_saved = theta_0_h(:);
 
 t_history_h = [];
 X_history_h = [];
 q_history_h = strings(0, 1);
 printed_xy = zeros(2, 0);
 printed_colour = strings(1, 0);
-
-% Simulation
+travel_xy = zeros(2, 0);
 while t_h < t_max_h && q ~= "DONE"
     theta_h = X_h(1:2);
     theta_dot_h = X_h(3:4);
     xy_h = H_sim*theta_h;
     xy_dot_h = H_sim*theta_dot_h;
-
     settled = norm(xy_dot_h) < velocity_tolerance;
     at_origin = norm(xy_h) < position_tolerance && settled;
     at_saved = norm(H_sim*(theta_h - theta_saved)) < position_tolerance && settled;
     q_old = q;
     switch q
+        case "TO_FIRST_POINT"
+            if t_h - t_mode >= t_move && at_saved
+                phi_start = 0;
+                q = "ACCELERATING";
+            end
         case "PRINTING"
             if t_print_progress >= t_print_h
                 q = "DONE";
-            elseif ~colour_changed && t_print_progress >= 0.28*t_print_h
-                colour_changed = true;
-                colour = "green";
-                theta_saved = theta_h;
+            elseif ~blue_restocked && t_print_progress >= 0.30*t_print_h
+                blue_restocked = true;
+                theta_saved = theta_h(:);
                 q = "STOP";
-            elseif ~filament_changed && t_print_progress >= 0.68*t_print_h
-                filament_changed = true;
-                theta_saved = theta_h;
+            elseif ~colour_changed && t_print_progress >= 0.50*t_print_h
+                colour_changed = true;
+                colour = "red";
+                theta_saved = theta_h(:);
+                q = "STOP";
+            elseif ~red_restocked && t_print_progress >= 0.80*t_print_h
+                red_restocked = true;
+                theta_saved = theta_h(:);
                 q = "STOP";
             end
         case "STOP"
-            if settled && t_h - t_mode >= 0.2
-                theta_move_start = theta_h;
-                theta_move_end = H_sim\[0;0];
+            if settled && t_h-t_mode >= 0.2
+                theta_move_start = theta_h(:);
+                theta_move_end = zeros(2, 1);
                 q = "TO_ORIGIN";
             end
         case "TO_ORIGIN"
@@ -509,12 +518,12 @@ while t_h < t_max_h && q ~= "DONE"
             end
         case "HEATING"
             if X_h(7) >= T_high
-                theta_move_start = theta_h;
-                theta_move_end = theta_saved;
+                theta_move_start = theta_h(:);
+                theta_move_end = theta_saved(:);
                 q = "TO_SAVED";
             end
         case "TO_SAVED"
-            if t_h - t_mode >= t_move
+            if t_h - t_mode >= t_move && at_saved
                 phi_start = omega_h*t_print_progress;
                 q = "ACCELERATING";
             end
@@ -529,30 +538,28 @@ while t_h < t_max_h && q ~= "DONE"
     if q == "DONE"
         break;
     end
-
-    theta_d_h = theta_h;
-    theta_dot_d_h = zeros(2,1);
-    theta_ddot_d_h = zeros(2,1);
-    theta_dddot_d_h = zeros(2,1);
+    theta_d_h = theta_h(:);
+    theta_dot_d_h = zeros(2, 1);
+    theta_ddot_d_h = zeros(2, 1);
+    theta_dddot_d_h = zeros(2, 1);
     u_nozzle_h = u_n_sim;
     switch q
         case "ACCELERATING"
             tau = min((t_h - t_mode)/t_acc,1);
             phi_h = phi_start + omega_h*t_acc*(tau^3 - 0.5*tau^4);
-            phi_dot_h = omega_h*(3*tau^2 - 2*tau^3);
-            phi_ddot_h = omega_h*(6*tau - 6*tau^2)/t_acc;
-            phi_dddot_h = omega_h*(6 - 12*tau)/t_acc^2;
+            phi_dot_h = omega_h*(3*tau^2-2*tau^3);
+            phi_ddot_h = omega_h*(6*tau-6*tau^2)/t_acc;
+            phi_dddot_h = omega_h*(6-12*tau)/t_acc^2;
             xy_d_h = [x_c_h + a_h*cos(phi_h); y_c_h + b_h*sin(phi_h)];
             xy_dot_d_h = [-a_h*sin(phi_h)*phi_dot_h; b_h*cos(phi_h)*phi_dot_h];
             xy_ddot_d_h = [-a_h*(cos(phi_h)*phi_dot_h^2 + sin(phi_h)*phi_ddot_h);
-                b_h*(-sin(phi_h)*phi_dot_h^2 + cos(phi_h)*phi_ddot_h)];
-            xy_dddot_d_h = [a_h*sin(phi_h)*phi_dot_h^3 - 3*a_h*cos(phi_h)*phi_dot_h*phi_ddot_h - a_h*sin(phi_h)*phi_dddot_h;
-                -b_h*cos(phi_h)*phi_dot_h^3 - 3*b_h*sin(phi_h)*phi_dot_h*phi_ddot_h + b_h*cos(phi_h)*phi_dddot_h];
+                 b_h*(-sin(phi_h)*phi_dot_h^2 + cos(phi_h)*phi_ddot_h)];
+            xy_dddot_d_h = [a_h*sin(phi_h)*phi_dot_h^3 - 3*a_h*cos(phi_h)*phi_dot_h*phi_ddot_h - a_h*sin(phi_h)*phi_dddot_h; 
+                -b_h*cos(phi_h)*phi_dot_h^3 - 3*b_h*sin(phi_h)*phi_dot_h*phi_ddot_h + b_h*cos(phi_h)*phi_dddot_h ];
             theta_d_h = H_sim\xy_d_h;
             theta_dot_d_h = H_sim\xy_dot_d_h;
             theta_ddot_d_h = H_sim\xy_ddot_d_h;
             theta_dddot_d_h = H_sim\xy_dddot_d_h;
-            u_nozzle_h = u_n_sim;
         case "PRINTING"
             phi_h = omega_h*t_print_progress;
             xy_d_h = [x_c_h + a_h*cos(phi_h); y_c_h + b_h*sin(phi_h)];
@@ -563,13 +570,16 @@ while t_h < t_max_h && q ~= "DONE"
             theta_dot_d_h = H_sim\xy_dot_d_h;
             theta_ddot_d_h = H_sim\xy_ddot_d_h;
             theta_dddot_d_h = H_sim\xy_dddot_d_h;
-        case {"TO_ORIGIN","TO_SAVED"}
+        case {"TO_FIRST_POINT", "TO_ORIGIN", "TO_SAVED"}
             tau = min((t_h - t_mode)/t_move,1);
             f = 10*tau^3 - 15*tau^4 + 6*tau^5;
             f_dot = (30*tau^2 - 60*tau^3 + 30*tau^4)/t_move;
             f_ddot = (60*tau - 180*tau^2 + 120*tau^3)/t_move^2;
             f_dddot = (60 - 360*tau + 360*tau^2)/t_move^3;
-            delta_theta = theta_move_end-theta_move_start;
+
+            theta_move_start = theta_move_start(:);
+            theta_move_end = theta_move_end(:);
+            delta_theta = theta_move_end - theta_move_start;
             theta_d_h = theta_move_start + delta_theta*f;
             theta_dot_d_h = delta_theta*f_dot;
             theta_ddot_d_h = delta_theta*f_ddot;
@@ -577,29 +587,39 @@ while t_h < t_max_h && q ~= "DONE"
             if q == "TO_ORIGIN"
                 u_nozzle_h = 0;
             end
-        case {"STOP","WIPING","COOLING","LOADING","HEATING"}
-            theta_dot_d_h = zeros(2,1);
-            theta_ddot_d_h = zeros(2,1);
-            theta_dddot_d_h = zeros(2,1);
+        case {"STOP","WIPING", "COOLING", "LOADING", "HEATING"}
+            theta_dot_d_h = zeros(2, 1);
+            theta_ddot_d_h = zeros(2, 1);
+            theta_dddot_d_h = zeros(2, 1);
             if q == "WIPING" || q == "COOLING" || q == "LOADING"
                 u_nozzle_h = 0;
             end
     end
+    theta_dot_d_h = theta_dot_d_h(:);
+    theta_ddot_d_h = theta_ddot_d_h(:);
+    theta_dddot_d_h = theta_dddot_d_h(:);
     i_d_h = (J_eq_h*theta_ddot_d_h + D_h*theta_dot_d_h)/K_m_sim;
     i_dot_d_h = (J_eq_h*theta_dddot_d_h + D_h*theta_ddot_d_h)/K_m_sim;
     U_h = R_m_sim*i_d_h + L_m_sim*i_dot_d_h + K_m_sim*theta_dot_d_h;
+    U_h = U_h(:);
+
     X_dot_carriage = A_sim*X_h(1:6) + B_sim*U_h;
     X_h(1:6) = X_h(1:6) + dt_h*X_dot_carriage;
     for k = 1:n_nozzle
         T_n_h = X_h(7);
         i_n_h = X_h(8);
         v_n_h = X_h(9);
-        T_n_dot_h = (v_n_h^2/R_n_sim - (T_n_h-T_e_sim)/R_t_n_sim)/C_t_n_sim;
+        T_n_dot_h = (v_n_h^2/R_n_sim - (T_n_h - T_e_sim)/R_t_n_sim)/C_t_n_sim;
         i_n_dot_h = (u_nozzle_h - v_n_h)/L_n_sim;
         v_n_dot_h = (i_n_h - v_n_h/R_n_sim)/C_n_sim;
         X_h(7:9) = X_h(7:9) + dt_n_h*[T_n_dot_h; i_n_dot_h; v_n_dot_h];
     end
     t_h = t_h + dt_h;
+    if q ~= "PRINTING" && q ~= "ACCELERATING"
+        travel_xy(:, end+1) = H_sim*X_h(1:2);
+    else
+        travel_xy(:, end+1) = [NaN;NaN];
+    end
     if q == "PRINTING" || q == "ACCELERATING"
         if q == "ACCELERATING"
             t_print_progress = phi_h/omega_h;
@@ -615,26 +635,29 @@ while t_h < t_max_h && q ~= "DONE"
         q_history_h(end+1, 1) = q;
     end
 end
-
 figure;
 hold on;
+plot(travel_xy(1, :), travel_xy(2, :), 'Color', [0.6 0.6 0.6], 'LineWidth', 1);
+blue = printed_colour == "blue";
 red = printed_colour == "red";
-green = printed_colour == "green";
-scatter(printed_xy(1, red), printed_xy(2, red),5, 'r', 'filled');
-scatter(printed_xy(1, green), printed_xy(2, green), 5, 'g', 'filled');
+scatter(printed_xy(1, blue),printed_xy(2, blue), 5, 'b', 'filled');
+scatter(printed_xy(1, red),printed_xy(2, red), 5, 'r', 'filled');
 phi_plot = linspace(0, 2*pi, 501);
 x_ellipse = x_c_h + a_h*cos(phi_plot);
 y_ellipse = y_c_h + b_h*sin(phi_plot);
-plot(x_ellipse,y_ellipse, 'k--', 'LineWidth', 1.5);
+plot(x_ellipse, y_ellipse, 'k--', 'LineWidth', 1.5);
+plot(0, 0, 'ko', 'MarkerFaceColor', 'k');
 axis equal;
 grid on;
 xlabel('x (m)');
 ylabel('y (m)');
+xlim([-0.05 0.25]);
+ylim([-0.05 0.25]);
 title('Q3.1: Hybrid printing');
-legend('Red filament', 'Green filament',' Desired ellipse');
+legend('Non-printing movement', 'Blue filament', 'Red filament', 'Desired ellipse', 'Origin', 'Location', 'southeast');
 
 figure;
-tiledlayout(2, 1);
+tiledlayout(2,1);
 nexttile;
 plot(t_history_h, X_history_h(:, 7), 'LineWidth', 1.5);
 hold on;
@@ -644,82 +667,238 @@ grid on;
 xlabel('Time (s)');
 ylabel('Nozzle temperature (^{\circ}C)');
 title('Q3.1: Nozzle temperature');
-
 nexttile;
-states = ["PRINTING", "STOP", "TO_ORIGIN", "WIPING", "COOLING", "LOADING", "HEATING", "TO_SAVED", "ACCELERATING", "DONE"];
+states = ["TO_FIRST_POINT", "PRINTING", "STOP", "TO_ORIGIN", "WIPING", "COOLING", "LOADING", "HEATING", "TO_SAVED", "ACCELERATING", "DONE"];
 state_index = zeros(length(q_history_h), 1);
 for j = 1:length(states)
     state_index(q_history_h == states(j)) = j;
 end
 stairs(t_history_h, state_index, 'LineWidth', 1.5);
-yticks(1: length(states));
+yticks(1:length(states));
 yticklabels(states);
 grid on;
 xlabel('Time (s)');
 ylabel('FSM state');
 title('Q3.1: FSM transitions');
-%% Q3.2 Drawing a square
-square_side = 0.070;
+
+
+%% Q3.2 Hybrid system - Square trajectory
+square_length = 0.070;
+square_half = square_length/2;
 x_c_square = parameters_values(13);
 y_c_square = parameters_values(14);
-h_square = square_side/2;
-corners = [x_c_square - h_square, x_c_square + h_square, x_c_square + h_square, x_c_square - h_square, x_c_square - h_square;
-    y_c_square - h_square, y_c_square - h_square, y_c_square + h_square, y_c_square + h_square, y_c_square - h_square];
-
-theta_corners = H_sim\corners;
-t_side = 2.0;
+corners_square = [x_c_square  -  square_half, x_c_square + square_half, x_c_square + square_half, x_c_square - square_half, x_c_square - square_half;
+    y_c_square - square_half, y_c_square - square_half, y_c_square + square_half, y_c_square + square_half, y_c_square - square_half];
+theta_corners_square = H_sim\corners_square;
 dt_square = 0.001;
-n_side = round(t_side/dt_square);
-X_square = [theta_corners(:, 1); zeros(4, 1)];
+dt_nozzle_square = 1.0e-5;
+n_nozzle_square = round(dt_square/dt_nozzle_square);
+t_side_square = 3.0;
+t_move_square = 3.0;
+t_max_square = 500;
+restock_duration = 2.0;
+T_low_square = 210;
+T_high_square = 240;
+angle_tol_square = 0.05;
+speed_tol_square = 0.1;
+
+X_square = [zeros(6, 1); T_d_sim; u_n_sim/R_n_sim; u_n_sim];
+q_square = "TO_FIRST_CORNER";
 t_square = 0;
-t_square_history = t_square;
-X_square_history = X_square.';
+t_mode_square = 0;
+side_square = 1;
+colour_square = "blue";
+colour_changed_square = false;
+theta_move_start_square = zeros(2, 1);
+theta_move_end_square = theta_corners_square(:, 1);
+theta_saved_square = theta_corners_square(:, 1);
 
-for side = 1:4
-    theta_start = theta_corners(:, side);
-    theta_end = theta_corners(:, side+1);
-    delta_theta = theta_end - theta_start;
-    for j = 1:n_side
-        tau = (j - 1)*dt_square/t_side;
-        f = 10*tau^3 - 15*tau^4 + 6*tau^5;
-        f_dot = (30*tau^2 - 60*tau^3 + 30*tau^4)/t_side;
-        f_ddot = (60*tau - 180*tau^2 + 120*tau^3)/t_side^2;
-        f_dddot = (60 - 360*tau + 360*tau^2)/t_side^3;
+t_history_square = [];
+X_history_square = [];
+q_history_square = strings(0, 1);
+printed_xy_square = zeros(2, 0);
+printed_colour_square = strings(1, 0);
+travel_xy_square = zeros(2, 0);
 
-        theta_d_square = theta_start + delta_theta*f;
-        theta_dot_d_square = delta_theta*f_dot;
-        theta_ddot_d_square = delta_theta*f_ddot;
-        theta_dddot_d_square = delta_theta*f_dddot;
+while t_square < t_max_square && q_square ~= "DONE"
+    theta_square = X_square(1:2);
+    theta_dot_square = X_square(3:4);
+    xy_square = H_sim*theta_square;
+    xy_dot_square = H_sim*theta_dot_square;
+    settled_square = norm(xy_dot_square) < velocity_tolerance;
+    at_target_square = norm(H_sim*(theta_square - theta_move_end_square)) < position_tolerance && settled_square;
+    q_old_square = q_square;
+    switch q_square
+        case "TO_FIRST_CORNER"
+            if t_square-t_mode_square >= t_move_square && at_target_square
+                q_square = "PRINTING";
+            end
+        case "PRINTING"
+            if t_square-t_mode_square >= t_side_square
+                if side_square == 4
+                    q_square = "DONE";
+                elseif side_square == 2 && ~colour_changed_square
+                    colour_changed_square = true;
+                    theta_saved_square = theta_square(:);
+                    q_square = "STOP";
+                else
+                    side_square = side_square + 1;
+                    t_mode_square = t_square;
+                end
+            end
+        case "STOP"
+            if settled_square && t_square - t_mode_square >= 0.2
+                theta_move_start_square = theta_square(:);
+                theta_move_end_square = zeros(2, 1);
+                q_square = "TO_ORIGIN";
+            end
+        case "TO_ORIGIN"
+            if t_square - t_mode_square >= t_move_square ...
+                    && at_target_square
+                q_square = "COOLING";
+            end
+        case "COOLING"
+            if X_square(7) <= T_low_square
+                q_square = "CHANGING_FILAMENT";
+            end
+        case "CHANGING_FILAMENT"
+            if t_square - t_mode_square >= restock_duration
+                colour_square = "red";
+                q_square = "HEATING";
+            end
+        case "HEATING"
+            if X_square(7) >= T_high_square
+                theta_move_start_square = theta_square(:);
+                theta_move_end_square = theta_saved_square(:);
+                q_square = "TO_SAVED";
+            end
+        case "TO_SAVED"
+            if t_square - t_mode_square >= t_move_square && at_target_square
+                side_square = 3;
+                q_square = "PRINTING";
+            end
+    end
+    if q_square ~= q_old_square
+        t_mode_square = t_square;
+    end
+    if q_square == "DONE"
+        break;
+    end
 
-        i_d_square = (J_eq_h*theta_ddot_d_square + D_h*theta_dot_d_square)/K_m_sim;
-        i_dot_d_square = (J_eq_h*theta_dddot_d_square + D_h*theta_ddot_d_square)/K_m_sim;
+    theta_d_square = theta_square(:);
+    theta_dot_d_square = zeros(2, 1);
+    theta_ddot_d_square = zeros(2, 1);
+    theta_dddot_d_square = zeros(2, 1);
+    u_nozzle_square = u_n_sim;
+    switch q_square
+        case "PRINTING"
+            tau = min((t_square-t_mode_square)/t_side_square,1);
+            f = 10*tau^3 - 15*tau^4 + 6*tau^5;
+            f_dot = (30*tau^2 - 60*tau^3 + 30*tau^4)/t_side_square;
+            f_ddot = (60*tau - 180*tau^2 + 120*tau^3)/t_side_square^2;
+            f_dddot = (60 - 360*tau + 360*tau^2)/t_side_square^3;
+            theta_start_square = theta_corners_square(:, side_square);
+            theta_end_square = theta_corners_square(:, side_square+1);
+            delta_theta_square = theta_end_square - theta_start_square;
+            theta_d_square = theta_start_square + delta_theta_square*f;
+            theta_dot_d_square = delta_theta_square*f_dot;
+            theta_ddot_d_square = delta_theta_square*f_ddot;
+            theta_dddot_d_square = delta_theta_square*f_dddot;
+        case {"TO_FIRST_CORNER", "TO_ORIGIN", "TO_SAVED"}
+            tau = min((t_square - t_mode_square)/t_move_square, 1);
+            f = 10*tau^3 - 15*tau^4 + 6*tau^5;
+            f_dot = (30*tau^2 - 60*tau^3 + 30*tau^4)/t_move_square;
+            f_ddot = (60*tau - 180*tau^2 + 120*tau^3)/t_move_square^2;
+            f_dddot = (60 - 360*tau + 360*tau^2)/t_move_square^3;
+            delta_theta_square = theta_move_end_square(:) - theta_move_start_square(:);
+            theta_d_square = theta_move_start_square(:) + delta_theta_square*f;
 
-        U_square = R_m_sim*i_d_square + L_m_sim*i_dot_d_square + K_m_sim*theta_dot_d_square;
-        X_dot_square = A_sim*X_square + B_sim*U_square;
-        X_square = X_square + dt_square*X_dot_square;
-        t_square = t_square + dt_square;
-        t_square_history(end+1, 1) = t_square;
-        X_square_history(end+1, :) = X_square.';
+            theta_dot_d_square = delta_theta_square*f_dot;
+            theta_ddot_d_square = delta_theta_square*f_ddot;
+            theta_dddot_d_square = delta_theta_square*f_dddot;
+        case {"STOP","COOLING", "CHANGING_FILAMENT", "HEATING"}
+            theta_dot_d_square = zeros(2, 1);
+            theta_ddot_d_square = zeros(2, 1);
+            theta_dddot_d_square = zeros(2, 1);
+    end
+    if q_square == "TO_ORIGIN" || q_square == "COOLING" || q_square == "CHANGING_FILAMENT"
+        u_nozzle_square = 0;
+    end
+    theta_dot_d_square = theta_dot_d_square(:);
+    theta_ddot_d_square = theta_ddot_d_square(:);
+    theta_dddot_d_square = theta_dddot_d_square(:);
+    i_d_square = (J_eq_h*theta_ddot_d_square + D_h*theta_dot_d_square)/K_m_sim;
+    i_dot_d_square = (J_eq_h*theta_dddot_d_square + D_h*theta_ddot_d_square)/K_m_sim;
+    U_square = R_m_sim*i_d_square + L_m_sim*i_dot_d_square + K_m_sim*theta_dot_d_square;
+    U_square = U_square(:);
+
+    X_dot_carriage_square = A_sim*X_square(1:6) + B_sim*U_square;
+    X_square(1:6) = X_square(1:6) + dt_square*X_dot_carriage_square;
+    for k = 1:n_nozzle_square
+        T_n_square = X_square(7);
+        i_n_square = X_square(8);
+        v_n_square = X_square(9);
+        T_n_dot_square = (v_n_square^2/R_n_sim - (T_n_square - T_e_sim)/R_t_n_sim)/C_t_n_sim;
+        i_n_dot_square = (u_nozzle_square - v_n_square)/L_n_sim;
+        v_n_dot_square = (i_n_square - v_n_square/R_n_sim)/C_n_sim;
+        X_square(7:9) = X_square(7:9) + dt_nozzle_square*[T_n_dot_square; i_n_dot_square; v_n_dot_square];
+    end
+    t_square = t_square + dt_square;
+    if q_square ~= "PRINTING"
+        travel_xy_square(:, end+1) = H_sim*X_square(1:2);
+    else
+        travel_xy_square(:, end+1) = [NaN;NaN];
+    end
+    if q_square == "PRINTING" && X_square(7) >= T_high_square
+        printed_xy_square(:, end+1) = H_sim*X_square(1:2);
+        printed_colour_square(end+1) = colour_square;
+    end
+    if mod(round(t_square/dt_square), 10) == 0
+        t_history_square(end+1, 1) = t_square;
+        X_history_square(end+1, :) = X_square.';
+        q_history_square(end+1, 1) = q_square;
     end
 end
 
-xy_square = H_sim*X_square_history(:, 1:2).';
-
 figure;
-plot(xy_square(1, :), xy_square(2, :), 'b-', 'LineWidth', 1.5);
 hold on;
-plot(corners(1, :), corners(2, :), 'k--', 'LineWidth', 1.5);
+plot(travel_xy_square(1, :), travel_xy_square(2, :), 'Color', [0.6 0.6 0.6], 'LineWidth', 1);
+blue_square = printed_colour_square == "blue";
+red_square = printed_colour_square == "red";
+scatter(printed_xy_square(1, blue_square), printed_xy_square(2, blue_square), 5, 'b', 'filled');
+scatter(printed_xy_square(1, red_square), printed_xy_square(2, red_square), 5, 'r', 'filled');
+plot(corners_square(1, :), corners_square(2, :), 'k--', 'LineWidth', 1.5);
+plot(0, 0, 'ko', 'MarkerFaceColor', 'k');
 axis equal;
 grid on;
+xlim([-0.05 0.25]);
+ylim([-0.05 0.25]);
 xlabel('x (m)');
 ylabel('y (m)');
-title('Q3.2: Drawing a square');
-legend('Simulated trajectory', 'Desired square', 'Location', 'best');
+title('Q3.2: Hybrid square printing');
+legend('Non-printing movement', 'Blue filament', 'Red filament', 'Desired square', 'Origin', 'Location', 'southeast');
 
 figure;
-plot(t_square_history, X_square_history(:, 1:2), 'LineWidth', 1.5);
+tiledlayout(2, 1);
+nexttile;
+plot(t_history_square, X_history_square(:, 7), 'LineWidth', 1.5);
+hold on;
+yline(T_low_square, 'r--', 'Low temperature');
+yline(T_high_square, 'g--', 'High temperature');
 grid on;
 xlabel('Time (s)');
-ylabel('Motor angle (rad)');
-title('Q3.2: Motor-angle measurements');
-legend('Left motor', 'Right motor', 'Location', 'best');
+ylabel('Temperature (^{\circ}C)');
+title('Q3.2: Nozzle temperature');
+nexttile;
+states_square = ["TO_FIRST_CORNER", "PRINTING", "STOP", "TO_ORIGIN", "COOLING", "CHANGING_FILAMENT", "HEATING","TO_SAVED","DONE"];
+state_index_square = zeros(length(q_history_square), 1);
+for j = 1:length(states_square)
+    state_index_square(q_history_square == states_square(j)) = j;
+end
+stairs(t_history_square, state_index_square, 'LineWidth', 1.5);
+yticks(1:length(states_square));
+yticklabels(states_square);
+grid on;
+xlabel('Time (s)');
+ylabel('FSM state');
+title('Q3.2: FSM transitions');
